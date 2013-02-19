@@ -233,7 +233,7 @@ v8_to_msgpack(Handle<Value> v8obj, msgpack_object *mo, msgpack_zone *mz,
 // This method is recursive. It will probably blow out the stack on objects
 // with extremely deep nesting.
 static Handle<Value>
-msgpack_to_v8(msgpack_object *mo) {
+msgpack_to_v8(msgpack_object *mo, bool rawToString = true) {
     switch (mo->type) {
     case MSGPACK_OBJECT_NIL:
         return Null();
@@ -256,22 +256,25 @@ msgpack_to_v8(msgpack_object *mo) {
         Local<Array> a = Array::New(mo->via.array.size);
 
         for (uint32_t i = 0; i < mo->via.array.size; i++) {
-            a->Set(i, msgpack_to_v8(&mo->via.array.ptr[i]));
+            a->Set(i, msgpack_to_v8(&mo->via.array.ptr[i], rawToString));
         }
 
         return a;
     }
 
     case MSGPACK_OBJECT_RAW:
-        return String::New(mo->via.raw.ptr, mo->via.raw.size);
+        if (rawToString)
+            return String::New(mo->via.raw.ptr, mo->via.raw.size);
+        else
+            return Buffer::New(const_cast<char *>(mo->via.raw.ptr), mo->via.raw.size)->handle_;
 
     case MSGPACK_OBJECT_MAP: {
         Local<Object> o = Object::New();
 
         for (uint32_t i = 0; i < mo->via.map.size; i++) {
             o->Set(
-                msgpack_to_v8(&mo->via.map.ptr[i].key),
-                msgpack_to_v8(&mo->via.map.ptr[i].val)
+                msgpack_to_v8(&mo->via.map.ptr[i].key, rawToString),
+                msgpack_to_v8(&mo->via.map.ptr[i].val, rawToString)
             );
         }
 
@@ -342,6 +345,16 @@ unpack(const Arguments &args) {
 
     Local<Object> buf = args[0]->ToObject();
 
+    bool rawToString = true;
+    
+    if (args.Length() > 1) {
+        if (!args[1]->IsBoolean())
+            return ThrowException(Exception::TypeError(
+                String::New("Second argument must be a Boolean")));
+
+        rawToString = args[1]->BooleanValue();
+    }
+
     MsgpackZone mz;
     msgpack_object mo;
     size_t off = 0;
@@ -354,7 +367,7 @@ unpack(const Arguments &args) {
                 msgpack_bytes_remaining_symbol,
                 Integer::New(static_cast<int32_t>(Buffer::Length(buf) - off))
             );
-            return scope.Close(msgpack_to_v8(&mo));
+            return scope.Close(msgpack_to_v8(&mo, rawToString));
         } catch (MsgpackException e) {
             return ThrowException(e.getThrownException());
         }
